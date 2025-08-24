@@ -2,34 +2,34 @@ pipeline {
   agent any
 
   environment {
-    IMAGE = "saniyaparasara/productivity-app"
+    REPO  = 'https://github.com/SaniyaParasara/productivity-app.git'  // your repo
+    BRANCH= 'main'
+    IMAGE = 'saniyaparasara/productivity-app'                         // your Docker Hub image
     TAG   = "build-${env.BUILD_NUMBER}"
-    // Pin a known-good Kaniko release to avoid 404s on "latest"
-    KANIKO_VER = "v1.23.2"
+    // Pin a Kaniko version to avoid 404s on "latest"
+    KANIKO_VER = 'v1.23.2'
     KANIKO_URL = "https://github.com/GoogleContainerTools/kaniko/releases/download/${KANIKO_VER}/executor-linux-amd64"
   }
 
-  options {
-    timestamps()
-    timeout(time: 20, unit: 'MINUTES')
-  }
+  options { timestamps(); timeout(time: 20, unit: 'MINUTES') }
 
   stages {
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        git branch: env.BRANCH, url: env.REPO
+      }
     }
 
     stage('Download Kaniko') {
       steps {
         script {
-          // Download the Kaniko executor binary and make it executable
           httpRequest httpMode: 'GET', url: env.KANIKO_URL, outputFile: 'kaniko'
-          sh 'chmod +x ./kaniko && ./kaniko --help >/dev/null 2>&1 || true'
+          sh 'chmod +x ./kaniko'
         }
       }
     }
 
-    stage('Build & Push Image') {
+    stage('Build & Push') {
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DU', passwordVariable: 'DP')]) {
           sh '''
@@ -39,10 +39,7 @@ pipeline {
             cat > /tmp/.docker/config.json <<EOF
 { "auths": { "https://index.docker.io/v1/": { "auth": "${AUTH}" } } }
 EOF
-
-            # Build & push the versioned tag
-            ./kaniko --dockerfile Dockerfile \
-                     --context "$WORKSPACE" \
+            ./kaniko --dockerfile Dockerfile --context "$WORKSPACE" \
                      --destination "${IMAGE}:${TAG}" \
                      --docker-config /tmp/.docker
           '''
@@ -61,10 +58,7 @@ EOF
             cat > /tmp/.docker/config.json <<EOF
 { "auths": { "https://index.docker.io/v1/": { "auth": "${AUTH}" } } }
 EOF
-
-            # Push latest tag (reuses same build context)
-            ./kaniko --dockerfile Dockerfile \
-                     --context "$WORKSPACE" \
+            ./kaniko --dockerfile Dockerfile --context "$WORKSPACE" \
                      --destination "${IMAGE}:latest" \
                      --docker-config /tmp/.docker
           '''
@@ -74,8 +68,6 @@ EOF
   }
 
   post {
-    always {
-      echo "Build result: ${currentBuild.currentResult}"
-    }
+    always { echo "Build result: ${currentBuild.currentResult}" }
   }
 }
