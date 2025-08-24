@@ -4,113 +4,97 @@ pipeline {
   environment {
     IMAGE       = "saniyaparasara/productivity-app"
     TAG         = "build-${env.BUILD_NUMBER}"
-    APP_PORT    = "8000"                 // container port
-    HOST_PORT   = "8000"                 // change if busy (e.g., 8010)
-    CONTAINER   = "productivity-app"     // fixed name
-    DOCKER_HOST = "tcp://host.docker.internal:2375"  // Docker Desktop TCP
+    APP_PORT    = "8000"
+    HOST_PORT   = "8000"
+    CONTAINER   = "productivity-app"
   }
 
-  options {
-    timestamps()
-    timeout(time: 25, unit: 'MINUTES')
-  }
+  options { timestamps(); timeout(time: 25, unit: 'MINUTES') }
 
   stages {
-    stage('Checkout') {
-      steps { checkout scm }
+    stage('Checkout') { steps { checkout scm } }
+
+    stage('Install Python deps for smoke test') {
+      steps {
+        sh '''
+          python3 -V || true
+          apt-get update && apt-get install -y python3 python3-pip curl ca-certificates
+          pip3 install --no-cache-dir -r requirements.txt
+        '''
+      }
     }
 
-    stage('Docker Build (runs tests in Dockerfile)') {
+    stage('Build image with Kaniko') {
       steps {
-        script {
-          if (isUnix()) { sh "docker build -t ${env.IMAGE}:${env.TAG} ." }
-          else          { bat "docker build -t ${env.IMAGE}:${env.TAG} ." }
+        withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DU', passwordVariable: 'DP')]) {
+          sh '''
+            set -e
+            mkdir -p /kaniko/.docker
+            AUTH=$(printf '%s:%s' "$DU" "$DP" | base64 -w0)
+cat >/kaniko/.docker/config.json <<EOF
+{ "auths": { "https://index.docker.io/v1/": { "auth": "${AUTH}" } } }
+EOF
+            curl -sSL -o /tmp/kaniko \
+              https://github.com/GoogleContainerTools/kaniko/releases/latest/download/executor-linux-amd64
+            chmod +x /tmp/kaniko
+
+            # Build & push :TAG (always) and :latest on main
+            /tmp/kaniko --dockerfile Dockerfile --context "$WORKSPACE" --destination "${IMAGE}:${TAG}"
+          '''
         }
       }
     }
 
-    stage('Push to Docker Hub (main only)') {
+    stage('Tag latest (main only)') {
       when { branch 'main' }
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DU', passwordVariable: 'DP')]) {
-          script {
-            if (isUnix()) {
-              sh  "echo ${DP} | docker login -u ${DU} --password-stdin"
-              sh  "docker tag ${env.IMAGE}:${env.TAG} ${env.IMAGE}:latest"
-              sh  "docker push ${env.IMAGE}:${env.TAG}"
-              sh  "docker push ${env.IMAGE}:latest"
-            } else {
-              bat "echo ${DP} | docker login -u ${DU} --password-stdin"
-              bat "docker tag ${env.IMAGE}:${env.TAG} ${env.IMAGE}:latest"
-              bat "docker push ${env.IMAGE}:${env.TAG}"
-              bat "docker push ${env.IMAGE}:latest"
-            }
-          }
+          sh '''
+            set -e
+            mkdir -p /kaniko/.docker
+            AUTH=$(printf '%s:%s' "$DU" "$DP" | base64 -w0)
+cat >/kaniko/.docker/config.json <<EOF
+{ "auths": { "https://index.docker.io/v1/": { "auth": "${AUTH}" } } }
+EOF
+            curl -sSL -o /tmp/kaniko \
+              https://github.com/GoogleContainerTools/kaniko/releases/latest/download/executor-linux-amd64
+            chmod +x /tmp/kaniko
+
+            /tmp/kaniko --dockerfile Dockerfile --context "$WORKSPACE" --destination "${IMAGE}:latest"
+          '''
         }
       }
     }
 
-    stage('Deploy Local') {
+    stage('Smoke Test (run app directly)') {
       steps {
-        script {
-          if (isUnix()) {
-            sh  "docker rm -f ${env.CONTAINER} || true"
-            sh  "docker run -d --name ${env.CONTAINER} -p ${env.HOST_PORT}:${env.APP_PORT} ${env.IMAGE}:${env.TAG}"
-          } else {
-            bat "docker rm -f ${env.CONTAINER} || ver>nul"
-            bat "docker run -d --name ${env.CONTAINER} -p ${env.HOST_PORT}:${env.APP_PORT} ${env.IMAGE}:${env.TAG}"
-          }
-        }
-      }
-    }
-
-    stage('Smoke Test') {
-      steps {
-        script {
-          // Requires "HTTP Request" plugin
-          def ok = false
-          for (int i=0; i<12; i++) {
-            try {
-              def r = httpRequest url: "http://localhost:${env.HOST_PORT}/healthz",
-                                  validResponseCodes: '200',
-                                  timeout: 10
-              if (r?.content?.toLowerCase()?.contains('ok')) { ok = true; break }
-            } catch (e) {
-              sleep 3
-            }
-          }
-          if (!ok) { error "Smoke test failed: /healthz did not return ok" }
-        }
+        sh '''
+          set -e
+          # run flask app in background
+          python3 app.py & echo $! > app.pid
+          # wait a moment for startup
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:${HOST_PORT}/healthz >/dev/null 2>&1; then
+              OK=1; break
+            fi
+            sleep 1
+          done
+          if [ -z "$OK" ]; then
+            echo "Smoke failed"; kill $(cat app.pid) || true; exit 1
+          fi
+          # stop the app
+          kill $(cat app.pid) || true
+        '''
       }
     }
   }
 
   post {
     failure {
-      // Wrap in node to ensure workspace/FilePath is available even on early failures
-      node {
-        script {
-          try {
-            if (isUnix()) { sh  "docker logs ${env.CONTAINER} || true" }
-            else          { bat "docker logs ${env.CONTAINER} || ver>nul" }
-          } catch (e) {
-            echo "Could not fetch container logs: ${e}"
-          }
-        }
-      }
+      echo "Build failed."
     }
     always {
-      node {
-        script {
-          echo "Build result: ${currentBuild.currentResult}"
-          try {
-            if (isUnix()) { sh  "docker ps --format '{{.Names}} -> {{.Ports}}'" }
-            else          { bat "docker ps --format \"{{.Names}} -> {{.Ports}}\"" }
-          } catch (e) {
-            echo "Could not run docker ps: ${e}"
-          }
-        }
-      }
+      echo "Build result: ${currentBuild.currentResult}"
     }
   }
 }
