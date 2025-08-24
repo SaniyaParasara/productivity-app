@@ -4,6 +4,9 @@ pipeline {
   environment {
     IMAGE = "saniyaparasara/productivity-app"
     TAG   = "build-${env.BUILD_NUMBER}"
+    // Pin a known-good Kaniko release to avoid 404s on "latest"
+    KANIKO_VER = "v1.23.2"
+    KANIKO_URL = "https://github.com/GoogleContainerTools/kaniko/releases/download/${KANIKO_VER}/executor-linux-amd64"
   }
 
   options {
@@ -13,18 +16,15 @@ pipeline {
 
   stages {
     stage('Checkout') {
-      steps {
-        checkout scm
-      }
+      steps { checkout scm }
     }
 
     stage('Download Kaniko') {
       steps {
-        // Use HTTP Request plugin to download the Kaniko executor binary (no curl/wget needed)
         script {
-          def url = 'https://github.com/GoogleContainerTools/kaniko/releases/latest/download/executor-linux-amd64'
-          httpRequest httpMode: 'GET', url: url, outputFile: 'kaniko'
-          sh 'chmod +x ./kaniko'
+          // Download the Kaniko executor binary and make it executable
+          httpRequest httpMode: 'GET', url: env.KANIKO_URL, outputFile: 'kaniko'
+          sh 'chmod +x ./kaniko && ./kaniko --help >/dev/null 2>&1 || true'
         }
       }
     }
@@ -34,22 +34,17 @@ pipeline {
         withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DU', passwordVariable: 'DP')]) {
           sh '''
             set -e
-            # Create Docker auth config for Kaniko
             mkdir -p /tmp/.docker
-            printf '%s:%s' "$DU" "$DP" | base64 | tr -d '\\n' > /tmp/.docker/.auth
-            AUTH=$(cat /tmp/.docker/.auth)
-
+            AUTH="$(printf '%s:%s' "$DU" "$DP" | base64 | tr -d '\\n')"
             cat > /tmp/.docker/config.json <<EOF
 { "auths": { "https://index.docker.io/v1/": { "auth": "${AUTH}" } } }
 EOF
 
-            # Build & push tag
+            # Build & push the versioned tag
             ./kaniko --dockerfile Dockerfile \
                      --context "$WORKSPACE" \
                      --destination "${IMAGE}:${TAG}" \
                      --docker-config /tmp/.docker
-
-            # Also push :latest on main
           '''
         }
       }
@@ -62,13 +57,12 @@ EOF
           sh '''
             set -e
             mkdir -p /tmp/.docker
-            printf '%s:%s' "$DU" "$DP" | base64 | tr -d '\\n' > /tmp/.docker/.auth
-            AUTH=$(cat /tmp/.docker/.auth)
-
+            AUTH="$(printf '%s:%s' "$DU" "$DP" | base64 | tr -d '\\n')"
             cat > /tmp/.docker/config.json <<EOF
 { "auths": { "https://index.docker.io/v1/": { "auth": "${AUTH}" } } }
 EOF
 
+            # Push latest tag (reuses same build context)
             ./kaniko --dockerfile Dockerfile \
                      --context "$WORKSPACE" \
                      --destination "${IMAGE}:latest" \
