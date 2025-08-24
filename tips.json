@@ -1,0 +1,7 @@
+[
+  { "id": 1, "title": "Pomodoro Sprint", "text": "Work 25m, rest 5m. Repeat 4x, then a longer break.", "category": "focus" },
+  { "id": 2, "title": "One Thing First", "text": "Pick one must-do task each morning and finish it first.", "category": "priority" },
+  { "id": 3, "title": "Walk It Out", "text": "A 5–10 minute walk between tasks resets your brain.", "category": "wellness" },
+  { "id": 4, "title": "Tidy Desk", "text": "Clear your desk at day’s end to lower tomorrow’s friction.", "category": "mindset" },
+  { "id": 5, "title": "Deep Work Block", "text": "Silence notifications for a 60–90 minute focus block.", "category": "focus" }
+]

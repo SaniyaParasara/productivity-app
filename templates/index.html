@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Productivity Tips</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/static/style.css" rel="stylesheet" />
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <h1>{{ tip.title }}</h1>
+      <p class="text">{{ tip.text }}</p>
+      <p class="meta">Category: <span>{{ tip.category }}</span></p>
+      <div class="actions">
+        <button onclick="location.reload()">Another tip</button>
+        <button onclick="fetch('/api/tip').then(r=>r.json()).then(t=>alert(t.title+': '+t.text))">Random (API)</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
